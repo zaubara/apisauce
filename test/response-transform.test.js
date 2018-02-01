@@ -40,6 +40,24 @@ test('alters the response', t => {
   })
 })
 
+test('alters the response async', t => {
+  const x = create({ baseURL: `http://localhost:${port}` })
+  let count = 0
+  x.addAsyncResponseTransform(({ data }) =>
+    new Promise((resolve, reject) => {
+      count++
+      data.a = 'hi'
+      resolve(data)
+    })
+  )
+  t.is(count, 0)
+  return x.get('/number/201').then(response => {
+    t.is(response.status, 201)
+    t.is(count, 1)
+    t.deepEqual(response.data.a, 'hi')
+  })
+})
+
 test('swap out data on response', t => {
   const x = create({ baseURL: `http://localhost:${port}` })
   let count = 0

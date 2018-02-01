@@ -21,9 +21,11 @@ import {
   keys,
   forEach,
   pipe,
+  pipeP,
   partial,
   contains,
-  always
+  always,
+  equals
 } from 'ramda'
 
 /**
@@ -112,12 +114,11 @@ export const NETWORK_ERROR = 'NETWORK_ERROR'
 export const UNKNOWN_ERROR = 'UNKNOWN_ERROR'
 export const CANCEL_ERROR = 'CANCEL_ERROR'
 
-const TIMEOUT_ERROR_CODES = ['ECONNABORTED']
-const NODEJS_CONNECTION_ERROR_CODES = [
-  'ENOTFOUND',
-  'ECONNREFUSED',
-  'ECONNRESET'
-]
+const TIMEOUT_ERROR_CODE = 'ECONNABORTED'
+const NODEJS_CONNECTION_ERROR_CODE_NF = 'ENOTFOUND'
+const NODEJS_CONNECTION_ERROR_CODE_REF = 'ECONNREFUSED'
+const NODEJS_CONNECTION_ERROR_CODE_RES = 'ECONNRESET'
+
 const in200s = isWithin(200, 299)
 const in400s = isWithin(400, 499)
 const in500s = isWithin(500, 599)
@@ -144,11 +145,14 @@ export const create = config => {
   const requestTransforms = []
   const asyncRequestTransforms = []
   const responseTransforms = []
+  const asyncResponseTransforms = []
 
   const addRequestTransform = transform => requestTransforms.push(transform)
   const addAsyncRequestTransform = transform =>
     asyncRequestTransforms.push(transform)
   const addResponseTransform = transform => responseTransforms.push(transform)
+  const addAsyncResponseTransform = transform =>
+    asyncResponseTransforms.push(transform)
 
   // convenience for setting new request headers
   const setHeader = (name, value) => {
@@ -158,7 +162,8 @@ export const create = config => {
 
   // sets headers in bulk
   const setHeaders = headers => {
-    forEach(header => setHeader(header, headers[header]), keys(headers))
+    keys(headers).forEach(header => setHeader(header, headers[header]))
+    // forEach()
     return instance
   }
 
@@ -210,7 +215,7 @@ export const create = config => {
     if (requestTransforms.length > 0) {
       // overwrite our axios request with whatever our object looks like now
       // axiosRequestConfig = doRequestTransforms(requestTransforms, axiosRequestConfig)
-      forEach(transform => transform(axiosRequestConfig), requestTransforms)
+      requestTransforms.forEach(transform => transform(axiosRequestConfig))
     }
 
     // add the async request transforms
@@ -226,7 +231,7 @@ export const create = config => {
     }
 
     // after the call, convert the axios response, then execute our monitors
-    const chain = pipe(
+    const chain = pipeP(
       convertResponse(toNumber(new Date())),
       // partial(convertResponse, [toNumber(new Date())]),
       runMonitors
@@ -253,7 +258,7 @@ export const create = config => {
   /**
     Converts an axios response/error into our response.
    */
-  const convertResponse = curry((startedAt: number, axiosResult: AxiosResponse | AxiosError) => {
+  const convertResponse = curry(async (startedAt: number, axiosResult: AxiosResponse | AxiosError) => {
     const end: number = toNumber(new Date())
     const duration: number = end - startedAt
 
@@ -282,7 +287,17 @@ export const create = config => {
       data
     }
     if (responseTransforms.length > 0) {
-      forEach(transform => transform(transformedResponse), responseTransforms)
+      responseTransforms.forEach(transform => transform(transformedResponse))
+    }
+    if (asyncResponseTransforms.length > 0) {
+      for (let index = 0; index < asyncResponseTransforms.length; index++) {
+        const transform = asyncResponseTransforms[index](transformedResponse)
+        if (isPromise(transform)) {
+          await transform
+        } else {
+          await transform(transformedResponse)
+        }
+      }
     }
 
     return transformedResponse
@@ -303,8 +318,10 @@ export const create = config => {
     return cond([
       // if we don't have an error code, we have a response status
       [isNil, () => getProblemFromStatus(statusNil(error.response))],
-      [containsText(TIMEOUT_ERROR_CODES), always(TIMEOUT_ERROR)],
-      [containsText(NODEJS_CONNECTION_ERROR_CODES), always(CONNECTION_ERROR)],
+      [equals(TIMEOUT_ERROR_CODE), always(TIMEOUT_ERROR)],
+      [equals(NODEJS_CONNECTION_ERROR_CODE_NF), always(CONNECTION_ERROR)],
+      [equals(NODEJS_CONNECTION_ERROR_CODE_REF), always(CONNECTION_ERROR)],
+      [equals(NODEJS_CONNECTION_ERROR_CODE_RES), always(CONNECTION_ERROR)],
       [T, always(UNKNOWN_ERROR)]
     ])(error.code)
   }
@@ -333,6 +350,7 @@ export const create = config => {
     addRequestTransform,
     addAsyncRequestTransform,
     addResponseTransform,
+    addAsyncResponseTransform,
     setHeader,
     setHeaders,
     deleteHeader,
